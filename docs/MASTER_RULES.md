@@ -1,0 +1,15 @@
+# Hunter Dog Rules
+- Never write secrets into code. Read all credentials from environment variables.
+- No Google Places API, no Google Cloud billing-gated API of any kind. Zero card on file, ever.
+- Discovery = Playwright scraping Google Maps search results directly (ported from business-leads-ai-automation/scraper.js). Yellow Pages scraper is the fallback source if Maps returns zero results or raises.
+- Enrichment = visiting each lead's own website only (email, socials, contact page), ported from dog/scraper.py. No scraping of Google Maps place pages, no live Google search scraping.
+- Page speed = local Lighthouse CLI (npx lighthouse), never the PageSpeed Insights API. Capped per run by LIGHTHOUSE_MAX_PER_RUN from config. Skip leads with no website.
+- Ads-running signal = Meta Ad Library Graph API only. No Google Ad Transparency scraping.
+- Scoring = port the 0–100 weighted algorithm from leadIntelligence.js. Fold page-speed and ads-running in as additional signal bonuses. Keep bucket assignment (A+ to E).
+- Every module reads the full Sheets tab once and writes back once per run via batch update. Never per-row API calls.
+- Google Sheets CONFIG tab is the only source of runtime parameters. No hardcoded values.
+- Every module logs failures to a RUN_LOG tab. Never fail silently.
+- Every module is independent, retryable, and idempotent.
+- Type hints required on all functions. No global variables. No hardcoded paths.
+- Python 3.12+.
+- Sending is Gmail SMTP only, with a warm-up ramp (RAMP_STEP from config). No SendGrid, no Mailgun — keep one sending path.
