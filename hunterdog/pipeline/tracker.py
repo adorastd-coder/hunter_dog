@@ -21,6 +21,10 @@ def track_replies_and_followups() -> dict[str, int]:
         _log_failure(f"Tracker failed to initialize: {exc}")
         return {"replies_found": 0, "followups_sent": 0}
 
+    if runtime_config.CAMPAIGN_STATUS.strip().upper() == "PAUSED":
+        _log_info("Tracker skipped because CAMPAIGN_STATUS is PAUSED.")
+        return {"replies_found": 0, "followups_sent": 0}
+
     today = date.today()
     replies_found = 0
     followups_sent = 0
