@@ -77,19 +77,19 @@ if selected_indexes:
     st.subheader("批量操作")
     batch_left, batch_right = st.columns(2)
     with batch_left:
-    new_status = st.selectbox("批量改状态", ["SCRAPED", "ENRICHED", "SCORED", "EMAIL_READY", "SENT", "REPLIED"])
-    if st.button("应用状态"):
-        selected_keys = {(visible[index].get("name"), visible[index].get("email")) for index in selected_indexes}
-        for lead in leads:
-            if (lead.get("name"), lead.get("email")) in selected_keys:
-                lead["status"] = new_status
-        write_leads(leads)
-        st.rerun()
-with batch_right:
-    if st.button("删除选中"):
-        selected_keys = {(visible[index].get("name"), visible[index].get("email")) for index in selected_indexes}
-        write_leads([lead for lead in leads if (lead.get("name"), lead.get("email")) not in selected_keys])
-        st.rerun()
+        new_status = st.selectbox("批量改状态", ["SCRAPED", "ENRICHED", "SCORED", "EMAIL_READY", "SENT", "REPLIED"])
+        if st.button("应用状态"):
+            selected_keys = {(visible[index].get("name"), visible[index].get("email")) for index in selected_indexes}
+            for lead in leads:
+                if (lead.get("name"), lead.get("email")) in selected_keys:
+                    lead["status"] = new_status
+            write_leads(leads)
+            st.rerun()
+    with batch_right:
+        if st.button("删除选中"):
+            selected_keys = {(visible[index].get("name"), visible[index].get("email")) for index in selected_indexes}
+            write_leads([lead for lead in leads if (lead.get("name"), lead.get("email")) not in selected_keys])
+            st.rerun()
 
     lead = visible[selected_indexes[0]]
     st.subheader("详情面板")
