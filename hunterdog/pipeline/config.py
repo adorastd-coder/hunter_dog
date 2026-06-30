@@ -19,6 +19,7 @@ class Config:
     DAYS_BEFORE_DM: int
     RAMP_STEP: int
     LIGHTHOUSE_MAX_PER_RUN: int
+    FOLLOWUP_SCHEDULE_DAYS: str
     TEMPLATE_A_SUBJECT: str
     TEMPLATE_A_BODY: str
     TEMPLATE_B_SUBJECT: str
@@ -45,6 +46,7 @@ class Config:
             DAYS_BEFORE_DM=_int_value(values, "DAYS_BEFORE_DM"),
             RAMP_STEP=_int_value(values, "RAMP_STEP"),
             LIGHTHOUSE_MAX_PER_RUN=_int_value(values, "LIGHTHOUSE_MAX_PER_RUN"),
+            FOLLOWUP_SCHEDULE_DAYS=_string_value(values, "FOLLOWUP_SCHEDULE_DAYS"),
             TEMPLATE_A_SUBJECT=_string_value(values, "TEMPLATE_A_SUBJECT"),
             TEMPLATE_A_BODY=_string_value(values, "TEMPLATE_A_BODY"),
             TEMPLATE_B_SUBJECT=_string_value(values, "TEMPLATE_B_SUBJECT"),
@@ -85,6 +87,7 @@ def _required_keys() -> tuple[str, ...]:
         "DAYS_BEFORE_DM",
         "RAMP_STEP",
         "LIGHTHOUSE_MAX_PER_RUN",
+        "FOLLOWUP_SCHEDULE_DAYS",
         "TEMPLATE_A_SUBJECT",
         "TEMPLATE_A_BODY",
         "TEMPLATE_B_SUBJECT",
