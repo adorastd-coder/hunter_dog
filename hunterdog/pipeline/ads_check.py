@@ -20,22 +20,22 @@ def check_ads() -> list[dict[str, Any]]:
     token = os.environ.get("META_ACCESS_TOKEN", "").strip()
     updated_rows: list[dict[str, Any]] = []
     for lead in leads:
-    if _status(lead) not in {"ENRICHED", "SCORED"}:
-        updated_rows.append(lead)
-        continue
-    if _row_value(lead, "ads_running").strip():
-        updated_rows.append(lead)
-        continue
+        if _status(lead) not in {"ENRICHED", "SCORED"}:
+            updated_rows.append(lead)
+            continue
+        if _row_value(lead, "ads_running").strip():
+            updated_rows.append(lead)
+            continue
 
-    business_name = _row_value(lead, "name").strip()
-    if not token:
-        lead["ads_running"] = "unknown"
-        updated_rows.append(lead)
-        continue
-    if not business_name:
-        lead["ads_running"] = "unknown"
-        updated_rows.append(lead)
-        continue
+        business_name = _row_value(lead, "name").strip()
+        if not token:
+            lead["ads_running"] = "unknown"
+            updated_rows.append(lead)
+            continue
+        if not business_name:
+            lead["ads_running"] = "unknown"
+            updated_rows.append(lead)
+            continue
 
         try:
             lead["ads_running"] = _ads_running_status(business_name, token)
@@ -138,6 +138,10 @@ def _meta_error_message(error: Any) -> str:
         if message:
             return f"Meta API error: {message}"
     return "Meta API returned an error response."
+
+
+def _status(lead: dict[str, Any]) -> str:
+    return _row_value(lead, "status").strip().upper()
 
 
 def _row_value(row: dict[str, Any], key: str) -> str:
