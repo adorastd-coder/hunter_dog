@@ -58,6 +58,11 @@ def write_leads_batch(rows: list[dict[str, Any]]) -> None:
     worksheet = _worksheet("LEADS")
     headers = _headers_from_rows(rows)
     values = [headers, *[_row_values(row, headers) for row in rows]] if headers else []
+
+    worksheet.clear()
+    if not values:
+        return
+
     worksheet.spreadsheet.batch_update(
         {
             "requests": [
@@ -71,7 +76,6 @@ def write_leads_batch(rows: list[dict[str, Any]]) -> None:
             ]
         }
     )
-
 
 def log_run(message: str, level: str) -> None:
     worksheet = _worksheet("RUN_LOG")
