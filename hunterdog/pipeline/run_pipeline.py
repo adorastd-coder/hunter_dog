@@ -1,67 +1,72 @@
-from __future__ import annotations
+name: Run Hunter Dog Pipeline
 
-import importlib
-from typing import Any
+on:
+  schedule:
+    - cron: "0 6 */2 * *"
+  workflow_dispatch:
 
-from hunterdog.pipeline import sheets_client
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
 
+    env:
+      GOOGLE_CREDS_JSON: ${{ secrets.GOOGLE_CREDS_JSON }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      GMAIL_USER: ${{ secrets.GMAIL_USER }}
+      GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+      META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}
 
-def run_pipeline() -> dict[str, int]:
-    results: dict[str, int] = {}
-    for step_name, module_name in _pipeline_steps():
-        _log_info(f"{step_name} started.")
-        try:
-            module = importlib.import_module(f"hunterdog.pipeline.{module_name}")
-            result = module.run()
-            lead_count = _lead_count(result)
-            results[step_name] = lead_count
-            _log_info(f"{step_name} ended; lead count: {lead_count}.")
-        except Exception as exc:
-            results[step_name] = 0
-            _log_failure(f"{step_name} failed: {exc}")
-            _log_info(f"{step_name} ended; lead count: 0.")
-    return results
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
 
-def run() -> dict[str, int]:
-    return run_pipeline()
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
 
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
 
-def _pipeline_steps() -> tuple[tuple[str, str], ...]:
-    return (
-        ("discovery", "discovery"),
-        ("enricher", "enricher"),
-        ("speed_check", "speed_check"),
-        ("ads_check", "ads_check"),
-        ("scorer", "scorer"),
-        ("groq_writer", "groq_writer"),
-        ("sender", "sender"),
-        ("tracker", "tracker"),
-    )
+      - name: Cache npm packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-lighthouse
+          restore-keys: |
+            ${{ runner.os }}-npm-
 
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install \
+            gspread \
+            google-auth \
+            google-auth-oauthlib \
+            google-api-python-client \
+            playwright
 
-def _lead_count(result: Any) -> int:
-    if isinstance(result, list):
-        return len(result)
-    if isinstance(result, dict):
-        return sum(value for value in result.values() if isinstance(value, int))
-    if result is None:
-        return 0
-    return 1
+      - name: Install Playwright browser
+        run: python -m playwright install --with-deps chromium
 
+      - name: Install Lighthouse
+        run: npm install --global lighthouse
 
-def _log_info(message: str) -> None:
-    sheets_client.log_run(message=message, level="INFO")
+      - name: Warm npx Lighthouse cache
+        run: npx lighthouse --version
 
-
-def _log_failure(message: str) -> None:
-    try:
-        sheets_client.log_run(message=message, level="ERROR")
-    except Exception as exc:
-        raise RuntimeError(
-            f"{message}; additionally failed to write RUN_LOG: {exc}"
-        ) from exc
-
-
-if __name__ == "__main__":
-    run_pipeline()
+      - name: Run pipeline
+        run: python -m hunterdog.pipeline.run_pipeline
