@@ -167,8 +167,9 @@ def _due_followup_leads(
     return due_count
 
 
-def _followup_schedule() -> tuple[tuple[int, str], ...]:
-    return ((3, "followup_1"), (6, "followup_2"), (10, "followup_3"))
+def _followup_schedule(runtime_config) -> tuple[tuple[int, str], ...]:
+    days = [int(d.strip()) for d in runtime_config.FOLLOWUP_SCHEDULE_DAYS.split(",") if d.strip()]
+    return tuple((day, f"followup_{i+1}") for i, day in enumerate(days))
 
 
 def _gmail_token_info() -> dict[str, Any]:
