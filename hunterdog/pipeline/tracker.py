@@ -30,7 +30,7 @@ def track_replies_and_followups() -> dict[str, int]:
     followups_sent = 0
     failure_messages: list[str] = []
 
-    due_followups = _due_followup_leads(leads, today, runtime_config.DAYS_BEFORE_DM)
+    due_followups = _due_followup_leads(leads, today, runtime_config)
     for lead in leads:
         if _status(lead) != "SENT":
             continue
@@ -55,7 +55,7 @@ def track_replies_and_followups() -> dict[str, int]:
             followup_column = _due_followup_column(
                 lead,
                 days_since_sent,
-                runtime_config.DAYS_BEFORE_DM,
+                runtime_config,
             )
             if followup_column is None:
                 continue
@@ -137,12 +137,12 @@ def _followup_body(name: str) -> str:
 def _due_followup_column(
     lead: Mapping[str, Any],
     days_since_sent: int,
-    days_before_dm: int,
+    runtime_config: pipeline_config.Config,
 ) -> str | None:
-    if days_since_sent < days_before_dm:
+    if days_since_sent < runtime_config.DAYS_BEFORE_DM:
         return None
 
-    for minimum_days, followup_column in _followup_schedule():
+    for minimum_days, followup_column in _followup_schedule(runtime_config):
         if days_since_sent < minimum_days:
             continue
         if not _truthy(_row_value(lead, followup_column)):
@@ -153,7 +153,7 @@ def _due_followup_column(
 def _due_followup_leads(
     leads: list[dict[str, Any]],
     today: date,
-    days_before_dm: int,
+    runtime_config: pipeline_config.Config,
 ) -> int:
     due_count = 0
     for lead in leads:
@@ -162,12 +162,12 @@ def _due_followup_leads(
         sent_date = _parse_date(_row_value(lead, "sent_date"))
         if sent_date is None:
             continue
-        if _due_followup_column(lead, (today - sent_date).days, days_before_dm):
+        if _due_followup_column(lead, (today - sent_date).days, runtime_config):
             due_count += 1
     return due_count
 
 
-def _followup_schedule(runtime_config) -> tuple[tuple[int, str], ...]:
+def _followup_schedule(runtime_config: pipeline_config.Config) -> tuple[tuple[int, str], ...]:
     days = [int(d.strip()) for d in runtime_config.FOLLOWUP_SCHEDULE_DAYS.split(",") if d.strip()]
     return tuple((day, f"followup_{i+1}") for i, day in enumerate(days))
 
