@@ -1,13 +1,18 @@
 from __future__ import annotations
 
-import json
-import os
+import re
 from typing import Any
-from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.parse import quote_plus
+
+from playwright.sync_api import Page, sync_playwright
 
 from hunterdog.pipeline import sheets_client
+
+
+_RESULTS_COUNT_PATTERN = re.compile(r"~?\s*([\d,]+)\s+results?", re.IGNORECASE)
+_NO_RESULTS_PATTERN = re.compile(
+    r"no ads match your search|0\s+results", re.IGNORECASE
+)
 
 
 def check_ads() -> list[dict[str, Any]]:
@@ -17,32 +22,45 @@ def check_ads() -> list[dict[str, Any]]:
         _log_failure(f"Ads check failed to read leads: {exc}")
         return []
 
-    token = os.environ.get("META_ACCESS_TOKEN", "").strip()
     updated_rows: list[dict[str, Any]] = []
-    for lead in leads:
-        if _status(lead) not in {"ENRICHED", "SCORED"}:
-            updated_rows.append(lead)
-            continue
-        if _row_value(lead, "ads_running").strip():
-            updated_rows.append(lead)
-            continue
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-setuid-sandbox"],
+            )
+            page = browser.new_page(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/115.0.0.0 Safari/537.36"
+                ),
+                viewport={"width": 1280, "height": 800},
+            )
+            try:
+                for lead in leads:
+                    business_name = _row_value(lead, "name").strip()
+                    if not business_name:
+                        lead["ads_running"] = "unknown"
+                        updated_rows.append(lead)
+                        continue
 
-        business_name = _row_value(lead, "name").strip()
-        if not token:
+                    try:
+                        lead["ads_running"] = _ads_running_status(page, business_name)
+                    except Exception as exc:
+                        lead["ads_running"] = "unknown"
+                        _log_failure(
+                            f"Meta ads check failed for {_lead_label(lead)}: {exc}"
+                        )
+                    updated_rows.append(lead)
+            finally:
+                page.close()
+                browser.close()
+    except Exception as exc:
+        _log_failure(f"Ads check browser session failed: {exc}")
+        for lead in leads[len(updated_rows):]:
             lead["ads_running"] = "unknown"
             updated_rows.append(lead)
-            continue
-        if not business_name:
-            lead["ads_running"] = "unknown"
-            updated_rows.append(lead)
-            continue
-
-        try:
-            lead["ads_running"] = _ads_running_status(business_name, token)
-        except Exception as exc:
-            lead["ads_running"] = "unknown"
-            _log_failure(f"Meta ads check failed for {_lead_label(lead)}: {exc}")
-        updated_rows.append(lead)
 
     try:
         sheets_client.write_leads_batch(leads)
@@ -50,10 +68,6 @@ def check_ads() -> list[dict[str, Any]]:
         _log_failure(f"Ads check failed to write leads: {exc}")
         return []
 
-    if not token:
-        _log_failure(
-            "Ads check set ads_running=unknown: META_ACCESS_TOKEN environment variable is required."
-        )
     _log_info(f"Ads check updated {len(updated_rows)} leads.")
     return updated_rows
 
@@ -62,86 +76,30 @@ def run() -> list[dict[str, Any]]:
     return check_ads()
 
 
-def _ads_running_status(business_name: str, token: str) -> str:
-    payload = _meta_ads_archive_response(business_name, token)
-    data = payload.get("data")
-    if not isinstance(data, list):
-        return "unknown"
-    return "true" if data else "false"
+def _ads_running_status(page: Page, business_name: str) -> str:
+    page.goto(_ad_library_url(business_name), wait_until="networkidle", timeout=60000)
+    page.wait_for_timeout(3000)
+
+    body_text = page.locator("body").inner_text(timeout=15000)
+
+    if _NO_RESULTS_PATTERN.search(body_text):
+        return "false"
+
+    match = _RESULTS_COUNT_PATTERN.search(body_text)
+    if match:
+        count = int(match.group(1).replace(",", ""))
+        return "true" if count > 0 else "false"
+
+    return "unknown"
 
 
-def _meta_ads_archive_response(business_name: str, token: str) -> dict[str, Any]:
-    request = Request(
-        _ads_archive_url(business_name),
-        headers={"Accept": "application/json", "Authorization": f"Bearer {token}"},
-        method="GET",
+def _ad_library_url(business_name: str) -> str:
+    return (
+        "https://www.facebook.com/ads/library/"
+        "?active_status=active&ad_type=all&country=ALL"
+        f"&q={quote_plus(business_name)}"
+        "&search_type=keyword_unordered&media_type=all"
     )
-    try:
-        with urlopen(request, timeout=30) as response:
-            raw_body = response.read().decode("utf-8")
-    except HTTPError as exc:
-        raw_body = exc.read().decode("utf-8", errors="replace")
-        parsed_error = _try_parse_json_object(raw_body)
-        if parsed_error and "error" in parsed_error:
-            raise RuntimeError(_meta_error_message(parsed_error["error"])) from exc
-        raise RuntimeError(f"Meta ads_archive HTTP error {exc.code}.") from exc
-    except URLError as exc:
-        reason = str(getattr(exc, "reason", exc)).strip()
-        raise RuntimeError(f"Meta ads_archive request failed: {reason}") from exc
-
-    parsed = _parse_json_object(raw_body)
-    if parsed is None:
-        raise ValueError("Meta ads_archive JSON response must be an object.")
-    if "error" in parsed:
-        raise RuntimeError(_meta_error_message(parsed["error"]))
-    return parsed
-
-
-def _parse_json_object(raw_body: str) -> dict[str, Any] | None:
-    try:
-        parsed = json.loads(raw_body)
-    except json.JSONDecodeError as exc:
-        raise ValueError("Meta ads_archive returned invalid JSON.") from exc
-
-    if not isinstance(parsed, dict):
-        return None
-    return parsed
-
-
-def _try_parse_json_object(raw_body: str) -> dict[str, Any] | None:
-    try:
-        return _parse_json_object(raw_body)
-    except ValueError:
-        return None
-
-
-def _ads_archive_url(business_name: str) -> str:
-    query = urlencode(
-        {
-            "ad_active_status": "ACTIVE",
-            "ad_reached_countries": '["ALL"]',
-            "ad_type": "ALL",
-            "fields": "id,page_id,page_name",
-            "limit": "1",
-            "search_terms": business_name,
-        }
-    )
-    return f"https://graph.facebook.com/ads_archive?{query}"
-
-
-def _meta_error_message(error: Any) -> str:
-    if isinstance(error, dict):
-        message = str(error.get("message", "")).strip()
-        code = str(error.get("code", "")).strip()
-        if message and code:
-            return f"Meta API error {code}: {message}"
-        if message:
-            return f"Meta API error: {message}"
-    return "Meta API returned an error response."
-
-
-def _status(lead: dict[str, Any]) -> str:
-    return _row_value(lead, "status").strip().upper()
 
 
 def _row_value(row: dict[str, Any], key: str) -> str:

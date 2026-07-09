@@ -92,8 +92,23 @@ def _scrape_google_maps(query: str, max_results: int) -> list[DiscoveryLead]:
                 )
                 page.wait_for_timeout(3000)
                 _scroll_google_maps_results(page, max_results)
-                leads = _extract_google_maps_results(page)[:max_results]
-                _log_info(f"Discovery source Google Maps produced {len(leads)} leads.")
+                extraction = _extract_google_maps_results(page)
+                leads = extraction["leads"][:max_results]
+                if not leads:
+                    if extraction["cardCount"] > 0:
+                        _log_failure(
+                            "Google Maps discovery parsed 0 leads from "
+                            f"{extraction['cardCount']} result cards: selectors likely broken."
+                        )
+                    elif not extraction["feedFound"]:
+                        _log_failure(
+                            "Google Maps discovery found no results feed: "
+                            "page structure likely changed (broken selectors)."
+                        )
+                    else:
+                        _log_info("Discovery source Google Maps returned 0 results (genuine).")
+                else:
+                    _log_info(f"Discovery source Google Maps produced {len(leads)} leads.")
                 return leads
             finally:
                 page.close()
@@ -116,7 +131,7 @@ def _scroll_google_maps_results(page: Page, max_results: int) -> None:
     for _ in range(50):
         scroll_container.evaluate("(container) => container.scrollTop = container.scrollHeight")
         page.wait_for_timeout(2000)
-        result_count = page.locator(".TFQHme").count()
+        result_count = _visible_card_count(page)
         if result_count >= max_results:
             break
         if result_count == previous_count:
@@ -136,8 +151,23 @@ def _first_scroll_container(page: Page) -> Any | None:
     return None
 
 
-def _extract_google_maps_results(page: Page) -> list[DiscoveryLead]:
-    raw_results = page.evaluate(
+def _visible_card_count(page: Page) -> int:
+    return page.evaluate(
+        """
+        () => {
+          const selectors = ['.TFQHme', '.Nv2PK', 'div[role="article"]', 'a.hfpxzc'];
+          for (const selector of selectors) {
+            const count = document.querySelectorAll(selector).length;
+            if (count > 0) return count;
+          }
+          return 0;
+        }
+        """
+    )
+
+
+def _extract_google_maps_payload(page: Page) -> dict[str, Any]:
+    return page.evaluate(
         """
         () => {
           const results = [];
@@ -174,8 +204,12 @@ def _extract_google_maps_results(page: Page) -> list[DiscoveryLead]:
           }
 
           function extractBusinessFromCard(card) {
-            const nameElement = card.querySelector('.qBF1Pd.fontHeadlineSmall');
-            const name = nameElement ? nameElement.textContent.trim() : '';
+            const nameElement = card.querySelector('.qBF1Pd.fontHeadlineSmall')
+              || card.querySelector('.qBF1Pd')
+              || card.querySelector('.fontHeadlineSmall');
+            const linkLabel = card.querySelector('a.hfpxzc');
+            let name = nameElement ? nameElement.textContent.trim() : '';
+            if (!name && linkLabel) name = (linkLabel.getAttribute('aria-label') || '').trim();
             const allSpans = Array.from(card.querySelectorAll('span'));
 
             let address = '';
@@ -233,6 +267,17 @@ def _extract_google_maps_results(page: Page) -> list[DiscoveryLead]:
             };
           }
 
+          const cardSelectors = ['.Nv2PK', 'div[role="article"]'];
+          function collectCards() {
+            for (const selector of cardSelectors) {
+              const found = Array.from(document.querySelectorAll(selector));
+              if (found.length) return found;
+            }
+            // Last resort: cards reachable from result anchors.
+            const anchors = Array.from(document.querySelectorAll('a.hfpxzc'));
+            return anchors.map((a) => a.closest('div') || a).filter(Boolean);
+          }
+
           const separators = Array.from(document.querySelectorAll('.TFQHme'));
           for (const separator of separators) {
             const businessCard = separator.nextElementSibling
@@ -244,18 +289,38 @@ def _extract_google_maps_results(page: Page) -> list[DiscoveryLead]:
             }
           }
 
+          const cards = collectCards();
           if (results.length === 0) {
-            for (const card of Array.from(document.querySelectorAll('.Nv2PK'))) {
+            for (const card of cards) {
               const business = extractBusinessFromCard(card);
               if (business.name && business.address) results.push(business);
             }
           }
 
-          return results;
+          const feed = document.querySelector('[role="feed"]') || document.querySelector('[role="main"]');
+          return {
+            results,
+            cardCount: Math.max(separators.length, cards.length),
+            feedFound: !!feed,
+          };
         }
         """
     )
-    return [_google_maps_lead(result) for result in raw_results if isinstance(result, dict)]
+
+
+def _extract_google_maps_results(page: Page) -> dict[str, Any]:
+    payload = _extract_google_maps_payload(page)
+    raw_results = payload.get("results") if isinstance(payload, dict) else None
+    leads = [
+        _google_maps_lead(result)
+        for result in (raw_results or [])
+        if isinstance(result, dict)
+    ]
+    return {
+        "leads": leads,
+        "cardCount": int(payload.get("cardCount", 0)) if isinstance(payload, dict) else 0,
+        "feedFound": bool(payload.get("feedFound", False)) if isinstance(payload, dict) else False,
+    }
 
 
 def _deduplicate_new_leads(
