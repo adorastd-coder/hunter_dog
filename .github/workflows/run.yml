@@ -69,4 +69,4 @@ jobs:
         run: npx lighthouse --version
 
       - name: Run pipeline
-        run: python hunterdog/pipeline/run_pipeline.py
+        run: python -m hunterdog.pipeline.run_pipeline
