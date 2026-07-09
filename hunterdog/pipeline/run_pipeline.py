@@ -1,72 +1,79 @@
-name: Run Hunter Dog Pipeline
+from __future__ import annotations
 
-on:
-  schedule:
-    - cron: "0 6 */2 * *"
-  workflow_dispatch:
+from typing import Any, Callable
 
-jobs:
-  run-pipeline:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+from hunterdog.pipeline import (
+    ads_check,
+    discovery,
+    enricher,
+    groq_writer,
+    scorer,
+    sender,
+    sheets_client,
+    speed_check,
+    tracker,
+)
 
-    env:
-      GOOGLE_CREDS_JSON: ${{ secrets.GOOGLE_CREDS_JSON }}
-      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-      GMAIL_USER: ${{ secrets.GMAIL_USER }}
-      GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-      META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}
 
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
+def run() -> dict[str, Any]:
+    """Run every Hunter Dog pipeline stage once, in order.
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
+    Each stage already reads the full Sheets tab once and writes back once,
+    and each stage already catches and logs its own failures to RUN_LOG
+    without raising. So stages here run unconditionally in sequence: a
+    failure inside one stage (already logged by that stage) does not
+    prevent later stages from running against whatever state the sheet is
+    currently in.
+    """
+    results: dict[str, Any] = {}
 
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
+    stages: list[tuple[str, Callable[[], Any]]] = [
+        ("discovery", discovery.run),
+        ("enricher", enricher.run),
+        ("speed_check", speed_check.run),
+        ("ads_check", ads_check.run),
+        ("scorer", scorer.run),
+        ("groq_writer", groq_writer.run),
+        ("sender", sender.run),
+        ("tracker", tracker.run),
+    ]
 
-      - name: Cache Playwright browsers
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-playwright-
+    for stage_name, stage_run in stages:
+        try:
+            results[stage_name] = stage_run()
+        except Exception as exc:
+            _log_failure(f"Pipeline stage '{stage_name}' raised unexpectedly: {exc}")
+            results[stage_name] = None
 
-      - name: Cache npm packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.npm
-          key: ${{ runner.os }}-npm-lighthouse
-          restore-keys: |
-            ${{ runner.os }}-npm-
+    _log_info(f"Pipeline run complete: {_summarize(results)}")
+    return results
 
-      - name: Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
-          python -m pip install \
-            gspread \
-            google-auth \
-            google-auth-oauthlib \
-            google-api-python-client \
-            playwright
 
-      - name: Install Playwright browser
-        run: python -m playwright install --with-deps chromium
+def _summarize(results: dict[str, Any]) -> str:
+    parts: list[str] = []
+    for stage_name, result in results.items():
+        if isinstance(result, list):
+            parts.append(f"{stage_name}={len(result)}")
+        elif isinstance(result, dict):
+            parts.append(f"{stage_name}={result}")
+        else:
+            parts.append(f"{stage_name}=failed")
+    return ", ".join(parts)
 
-      - name: Install Lighthouse
-        run: npm install --global lighthouse
 
-      - name: Warm npx Lighthouse cache
-        run: npx lighthouse --version
+def _log_info(message: str) -> None:
+    try:
+        sheets_client.log_run(message=message, level="INFO")
+    except Exception:
+        pass
 
-      - name: Run pipeline
-        run: python -m hunterdog.pipeline.run_pipeline
+
+def _log_failure(message: str) -> None:
+    try:
+        sheets_client.log_run(message=message, level="ERROR")
+    except Exception:
+        pass
+
+
+if __name__ == "__main__":
+    run()
